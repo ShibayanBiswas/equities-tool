@@ -32,6 +32,9 @@ def convert_rating_to_score(rating: str) -> float:
         'hold': 3.0,
         'neutral': 3.0,
         'equal-weight': 3.0,
+        'equal weight': 3.0,
+        'sector perform': 3.0,
+        'sectorperform': 3.0,
         'underperform': 2.0,
         'underweight': 2.0,
         'sell': 1.0,
@@ -50,34 +53,6 @@ def convert_rating_to_score(rating: str) -> float:
     
     # Default to neutral if unknown
     return 3.0
-
-
-def get_analyst_rating_score(df: pd.DataFrame) -> pd.Series:
-    """
-    Get analyst rating score from DataFrame.
-    Uses ratingScore if available, otherwise converts rating string.
-    
-    Args:
-        df: DataFrame with 'rating' and/or 'ratingScore' columns
-    
-    Returns:
-        Series with rating scores
-    """
-    scores = pd.Series(index=df.index, dtype=float)
-    
-    # First try to use ratingScore if available
-    if 'ratingScore' in df.columns:
-        scores = df['ratingScore'].fillna(0.0)
-        # Normalize ratingScore to 0-5 scale if it's in a different range
-        if scores.max() > 5:
-            scores = (scores / scores.max()) * 5.0
-    elif 'rating' in df.columns:
-        # Convert rating strings to scores
-        scores = df['rating'].apply(convert_rating_to_score)
-    else:
-        scores = pd.Series(0.0, index=df.index)
-    
-    return scores
 
 
 def normalize_scores(df: pd.DataFrame, columns: List[str], 
@@ -132,30 +107,12 @@ def calculate_composite_score_v2(df: pd.DataFrame) -> pd.DataFrame:
     # Initialize composite score
     composite_scores = []
     
-    # Count total parameters for equal weightage
-    # Parameters: ratingScore (1) + 6 other rating scores + 4 criteria + 6 financial ratios + 1 analyst sentiment + 1 earnings = 20 parameters
-    total_params = 20
-    weight_per_param = 5.0 / total_params  # Equal weight per parameter (0.25 points each)
-    
     for idx, row in df.iterrows():
-        score = 0.0
-        max_score = 0.0
+        # Step 1: Average of 7 rating scores (already out of 5)
+        rating_scores = []
         
-        # Step 1: Rating scores (each scored 0-5, equal weight)
-        # ratingScore
-        rating_score = row.get('ratingScore', 0) or 0
-        if pd.notna(rating_score) and rating_score > 0:
-            try:
-                rating_score_val = float(rating_score)
-                if 0 <= rating_score_val <= 5:
-                    # Each parameter gets equal weight: score (0-5) * (weight_per_param / 5.0)
-                    score += rating_score_val * (weight_per_param / 5.0)
-            except (ValueError, TypeError):
-                pass
-        max_score += weight_per_param
-        
-        # Other rating scores (each scored 0-5, equal weight)
-        for col in ['ratingDetailsDCFScore', 'ratingDetailsROEScore', 
+        # All rating scores in the same group
+        for col in ['ratingScore', 'ratingDetailsDCFScore', 'ratingDetailsROEScore', 
                     'ratingDetailsROAScore', 'ratingDetailsDEScore', 'ratingDetailsPEScore', 
                     'ratingDetailsPBScore']:
             val = row.get(col, 0) or 0
@@ -163,94 +120,119 @@ def calculate_composite_score_v2(df: pd.DataFrame) -> pd.DataFrame:
                 try:
                     num_val = float(val)
                     if 0 <= num_val <= 5:
-                        score += num_val * (weight_per_param / 5.0)
+                        rating_scores.append(num_val)
                 except (ValueError, TypeError):
                     pass
-            max_score += weight_per_param
         
-        # Step 2: Market cap, volume, beta, dividend criteria (each scored 0-5, equal weight)
+        # Calculate average of rating scores (out of 5)
+        if rating_scores:
+            avg_rating_score = np.mean(rating_scores)
+        else:
+            avg_rating_score = 0.0
+        
+        # Step 2: Score other parameters out of 5
+        other_scores = []
+        
         # Market Cap: 0 if < 1B, 5 if >= 1B
         market_cap = row.get('marketCap', 0) or 0
         market_cap_score = 5.0 if market_cap >= 1_000_000_000 else 0.0
-        score += market_cap_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(market_cap_score)
         
         # Volume: 0 if < 10000, 5 if >= 10000
         volume = row.get('volume', 0) or 0
         volume_score = 5.0 if volume >= 10000 else 0.0
-        score += volume_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(volume_score)
         
         # Beta: 0 if <= 1, 5 if > 1
         beta = row.get('beta', 0) or 0
         beta_score = 5.0 if beta > 1 else 0.0
-        score += beta_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(beta_score)
         
         # Dividend Yield: 0 if <= 1%, 5 if > 1%
         dividend_yield = row.get('dividendYield', 0) or 0
         dividend_score = 5.0 if dividend_yield > 0.01 else 0.0
-        score += dividend_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(dividend_score)
         
-        # Step 3: Financial ratios criteria (each scored 0-5, equal weight)
         # ROE: 0 if < 0.08, 5 if >= 0.08
         roe = row.get('roe', 0) or 0
         roe_score = 5.0 if roe >= 0.08 else 0.0
-        score += roe_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(roe_score)
         
         # Debt to Equity: 0 if > 0.50, 5 if <= 0.50
         debt_eq_ratio = row.get('debtToEquity', 0) or 0
         debt_score = 5.0 if debt_eq_ratio <= 0.50 else 0.0
-        score += debt_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(debt_score)
         
         # Current Ratio: 0 if < 1.50, 5 if >= 1.50
         current_ratio = row.get('currentRatio', 0) or 0
         current_ratio_score = 5.0 if current_ratio >= 1.50 else 0.0
-        score += current_ratio_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(current_ratio_score)
         
         # FCF Growth: 0 if <= 0, 5 if > 0
         fcf_growth = row.get('fcfGrowth', 0) or 0
         fcf_score = 5.0 if fcf_growth > 0 else 0.0
-        score += fcf_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(fcf_score)
         
         # Net Income Growth: 0 if <= 0, 5 if > 0
         net_income_growth = row.get('netIncomeGrowth', 0) or 0
         net_income_score = 5.0 if net_income_growth > 0 else 0.0
-        score += net_income_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(net_income_score)
         
         # Operating Margin: 0 if <= 0, 5 if > 0
         operating_margin = row.get('operatingMargin', 0) or 0
         operating_margin_score = 5.0 if operating_margin > 0 else 0.0
-        score += operating_margin_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(operating_margin_score)
         
         # Avg Shares Dil Growth: 0 if > 0, 5 if <= 0
         avg_shares_dil_growth = row.get('avgSharesDilGrowth', 0) or 0
         shares_growth_score = 5.0 if avg_shares_dil_growth <= 0 else 0.0
-        score += shares_growth_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(shares_growth_score)
         
-        # Step 4: Analyst Sentiment (scored 0-5, equal weight)
-        buy_count = row.get('analystBuyCount', 0) or 0
-        hold_count = row.get('analystHoldCount', 0) or 0
-        sell_count = row.get('analystSellCount', 0) or 0
-        total_analyst_count = buy_count + hold_count + sell_count
+        # Analyst Sentiment: 0-5 based on counts of newGrade values
+        # Count each grade type from newGrade and calculate weighted average using rating_map scores (lines 27-42)
+        analyst_strong_buy_count = row.get('analystStrongBuyCount', 0) or 0
+        analyst_buy_count = row.get('analystBuyCountSpecific', 0) or 0
+        analyst_outperform_count = row.get('analystOutperformCount', 0) or 0
+        analyst_overweight_count = row.get('analystOverweightCount', 0) or 0
+        analyst_hold_count = row.get('analystHoldCountSpecific', 0) or 0
+        analyst_neutral_count = row.get('analystNeutralCount', 0) or 0
+        analyst_equal_weight_count = row.get('analystEqualWeightCount', 0) or 0
+        analyst_sector_perform_count = row.get('analystSectorPerformCount', 0) or 0
+        analyst_underperform_count = row.get('analystUnderperformCount', 0) or 0
+        analyst_underweight_count = row.get('analystUnderweightCount', 0) or 0
+        analyst_sell_count = row.get('analystSellCountSpecific', 0) or 0
+        analyst_strong_sell_count = row.get('analystStrongSellCount', 0) or 0
         
-        if total_analyst_count > 0:
-            buy_ratio = buy_count / total_analyst_count
-            analyst_score = buy_ratio * 5.0  # Convert 0-1 to 0-5
+        # Calculate weighted average using scores from rating_map (lines 27-42)
+        total_count = (analyst_strong_buy_count + analyst_buy_count + analyst_outperform_count + 
+                      analyst_overweight_count + analyst_hold_count + analyst_neutral_count + 
+                      analyst_equal_weight_count + analyst_sector_perform_count + 
+                      analyst_underperform_count + analyst_underweight_count + 
+                      analyst_sell_count + analyst_strong_sell_count)
+        
+        if total_count > 0:
+            # Weighted average: (count * score) / total_count for each grade type
+            weighted_sum = (
+                analyst_strong_buy_count * 5.0 +      # Strong Buy: 5.0
+                analyst_buy_count * 4.0 +              # Buy: 4.0
+                analyst_outperform_count * 4.0 +        # Outperform: 4.0
+                analyst_overweight_count * 4.0 +        # Overweight: 4.0
+                analyst_hold_count * 3.0 +             # Hold: 3.0
+                analyst_neutral_count * 3.0 +          # Neutral: 3.0
+                analyst_equal_weight_count * 3.0 +      # Equal Weight: 3.0
+                analyst_sector_perform_count * 3.0 +    # Sector Perform: 3.0
+                analyst_underperform_count * 2.0 +      # Underperform: 2.0
+                analyst_underweight_count * 2.0 +       # Underweight: 2.0
+                analyst_sell_count * 1.0 +             # Sell: 1.0
+                analyst_strong_sell_count * 0.0        # Strong Sell: 0.0
+            )
+            analyst_score = weighted_sum / total_count  # Already on 0-5 scale
         else:
             analyst_score = 0.0
-        score += analyst_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
         
-        # Step 5: Earnings Surprises (scored 0-5, equal weight)
+        other_scores.append(analyst_score)
+        
+        # Earnings Surprises: 0-5 based on positive ratio
         earnings_positive_surprises = row.get('earningsPositiveSurprises', 0) or 0
         earnings_total_surprises = row.get('earningsSurprisesScore', 0) or 0
         
@@ -259,11 +241,41 @@ def calculate_composite_score_v2(df: pd.DataFrame) -> pd.DataFrame:
             earnings_score = positive_ratio * 5.0  # Convert 0-1 to 0-5
         else:
             earnings_score = 0.0
-        score += earnings_score * (weight_per_param / 5.0)
-        max_score += weight_per_param
+        other_scores.append(earnings_score)
         
-        # Final score is already on 0-5 scale (sum of all weighted parameters)
-        final_score = score
+        # Institutional Net Change: 0-5 based on net change / total shares ratio
+        institutional_net_change_pct = row.get('institutionalNetChangePct', 0) or 0
+        if pd.notna(institutional_net_change_pct):
+            try:
+                # Convert percentage to ratio
+                net_change_ratio = float(institutional_net_change_pct) / 100.0
+                
+                if net_change_ratio >= 0.10:
+                    institutional_score = 5.0
+                elif net_change_ratio >= 0.05:
+                    institutional_score = 4.0
+                elif net_change_ratio >= 0.02:
+                    institutional_score = 3.0
+                elif net_change_ratio > 0:
+                    institutional_score = 2.0
+                else:
+                    institutional_score = 0.0
+            except (ValueError, TypeError):
+                institutional_score = 0.0
+        else:
+            institutional_score = 0.0
+        other_scores.append(institutional_score)
+        
+        # Calculate average of other parameters (out of 5)
+        if other_scores:
+            avg_other_score = np.mean(other_scores)
+        else:
+            avg_other_score = 0.0
+        
+        # Step 3: Final aggregate score with 50% weightage to each group
+        # 50% weightage to rating scores average, 50% to other parameters average
+        final_score = (avg_rating_score * 0.5) + (avg_other_score * 0.5)
+        
         composite_scores.append(final_score)
     
     df['composite_score'] = composite_scores
@@ -291,7 +303,7 @@ def calculate_composite_score(df: pd.DataFrame,
     if 'ratingScore' not in df.columns:
         # No ratingScore column, try to create from rating string
         if 'rating' in df.columns:
-            df['ratingScore'] = get_analyst_rating_score(df)
+            df['ratingScore'] = df['rating'].apply(convert_rating_to_score)
         else:
             df['ratingScore'] = 0.0
     else:
@@ -306,6 +318,10 @@ def calculate_composite_score(df: pd.DataFrame,
         
         # Fill any remaining NaN with 0 (neutral)
         df['ratingScore'] = df['ratingScore'].fillna(0.0)
+        
+        # Normalize ratingScore to 0-5 scale if it's in a different range
+        if df['ratingScore'].max() > 5:
+            df['ratingScore'] = (df['ratingScore'] / df['ratingScore'].max()) * 5.0
     
     # Define scoring columns (higher is better)
     # Only sentiment, analyst, and earnings-based metrics

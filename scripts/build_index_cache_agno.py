@@ -842,8 +842,26 @@ class IndexCacheOrchestratorAgno:
                         if actual > estimated:
                             earnings_positive_surprises += 1
             
-            # Calculate analyst sentiment from analyst grades
+            # Calculate analyst sentiment from analyst grades - count each grade type from newGrade
             analyst_grades_data = ticker_data.get('analyst_grades', [])
+            
+            # Initialize aggregated grade counts dictionary
+            grade_counts = {
+                'strong_buy': 0,
+                'buy': 0,
+                'outperform': 0,
+                'overweight': 0,
+                'hold': 0,
+                'neutral': 0,
+                'equal_weight': 0,
+                'sector_perform': 0,
+                'underperform': 0,
+                'underweight': 0,
+                'sell': 0,
+                'strong_sell': 0
+            }
+            
+            # Category counts for backward compatibility
             analyst_buy_count = 0
             analyst_hold_count = 0
             analyst_sell_count = 0
@@ -851,12 +869,50 @@ class IndexCacheOrchestratorAgno:
             analyst_sentiment_count = 0
             
             if isinstance(analyst_grades_data, pd.DataFrame) and not analyst_grades_data.empty:
-                # Count by grade
-                if 'gradingCompany' in analyst_grades_data.columns:
-                    grades = analyst_grades_data['gradingCompany'].str.upper()
-                    analyst_buy_count = len(grades[grades.isin(['BUY', 'STRONG BUY', 'OUTPERFORM', 'OVERWEIGHT'])])
-                    analyst_hold_count = len(grades[grades.isin(['HOLD', 'NEUTRAL', 'EQUAL-WEIGHT'])])
-                    analyst_sell_count = len(grades[grades.isin(['SELL', 'STRONG SELL', 'UNDERPERFORM', 'UNDERWEIGHT'])])
+                # Use newGrade if available (as per stock analysis dashboard), otherwise use gradingCompany
+                grade_column = 'newGrade' if 'newGrade' in analyst_grades_data.columns else 'gradingCompany'
+                
+                if grade_column in analyst_grades_data.columns:
+                    # Count each specific grade type from newGrade
+                    for grade_val in analyst_grades_data[grade_column]:
+                        if pd.notna(grade_val) and grade_val:
+                            grade_str = str(grade_val).strip()
+                            grade_lower = grade_str.lower()
+                            
+                            # Count each specific grade type matching rating_map
+                            if 'strong buy' in grade_lower or 'strongbuy' in grade_lower:
+                                grade_counts['strong_buy'] += 1
+                            elif grade_lower == 'buy':
+                                grade_counts['buy'] += 1
+                            elif grade_lower == 'outperform':
+                                grade_counts['outperform'] += 1
+                            elif grade_lower == 'overweight':
+                                grade_counts['overweight'] += 1
+                            elif grade_lower == 'hold':
+                                grade_counts['hold'] += 1
+                            elif grade_lower == 'neutral':
+                                grade_counts['neutral'] += 1
+                            elif 'equal-weight' in grade_lower or 'equal weight' in grade_lower:
+                                grade_counts['equal_weight'] += 1
+                            elif 'sector perform' in grade_lower or 'sectorperform' in grade_lower:
+                                grade_counts['sector_perform'] += 1
+                            elif grade_lower == 'underperform':
+                                grade_counts['underperform'] += 1
+                            elif grade_lower == 'underweight':
+                                grade_counts['underweight'] += 1
+                            elif grade_lower == 'sell':
+                                grade_counts['sell'] += 1
+                            elif 'strong sell' in grade_lower or 'strongsell' in grade_lower:
+                                grade_counts['strong_sell'] += 1
+                    
+                    # Aggregate category counts for backward compatibility
+                    analyst_buy_count = (grade_counts['strong_buy'] + grade_counts['buy'] + 
+                                        grade_counts['outperform'] + grade_counts['overweight'])
+                    analyst_hold_count = (grade_counts['hold'] + grade_counts['neutral'] + 
+                                         grade_counts['equal_weight'] + grade_counts['sector_perform'])
+                    analyst_sell_count = (grade_counts['underperform'] + grade_counts['underweight'] + 
+                                         grade_counts['sell'] + grade_counts['strong_sell'])
+                
                 analyst_sentiment_count = len(analyst_grades_data)
                 # Average sentiment (buy=1, hold=0, sell=-1)
                 if analyst_sentiment_count > 0:
@@ -864,13 +920,45 @@ class IndexCacheOrchestratorAgno:
             elif isinstance(analyst_grades_data, list) and len(analyst_grades_data) > 0:
                 for grade_item in analyst_grades_data:
                     if isinstance(grade_item, dict):
-                        grade = str(grade_item.get('gradingCompany', '')).upper()
-                        if grade in ['BUY', 'STRONG BUY', 'OUTPERFORM', 'OVERWEIGHT']:
-                            analyst_buy_count += 1
-                        elif grade in ['HOLD', 'NEUTRAL', 'EQUAL-WEIGHT']:
-                            analyst_hold_count += 1
-                        elif grade in ['SELL', 'STRONG SELL', 'UNDERPERFORM', 'UNDERWEIGHT']:
-                            analyst_sell_count += 1
+                        # Try newGrade first, then gradingCompany
+                        grade = str(grade_item.get('newGrade', grade_item.get('gradingCompany', ''))).strip()
+                        if grade:
+                            grade_lower = grade.lower()
+                            
+                            # Count each specific grade type
+                            if 'strong buy' in grade_lower or 'strongbuy' in grade_lower:
+                                grade_counts['strong_buy'] += 1
+                            elif grade_lower == 'buy':
+                                grade_counts['buy'] += 1
+                            elif grade_lower == 'outperform':
+                                grade_counts['outperform'] += 1
+                            elif grade_lower == 'overweight':
+                                grade_counts['overweight'] += 1
+                            elif grade_lower == 'hold':
+                                grade_counts['hold'] += 1
+                            elif grade_lower == 'neutral':
+                                grade_counts['neutral'] += 1
+                            elif 'equal-weight' in grade_lower or 'equal weight' in grade_lower:
+                                grade_counts['equal_weight'] += 1
+                            elif 'sector perform' in grade_lower or 'sectorperform' in grade_lower:
+                                grade_counts['sector_perform'] += 1
+                            elif grade_lower == 'underperform':
+                                grade_counts['underperform'] += 1
+                            elif grade_lower == 'underweight':
+                                grade_counts['underweight'] += 1
+                            elif grade_lower == 'sell':
+                                grade_counts['sell'] += 1
+                            elif 'strong sell' in grade_lower or 'strongsell' in grade_lower:
+                                grade_counts['strong_sell'] += 1
+                
+                # Aggregate category counts for backward compatibility
+                analyst_buy_count = (grade_counts['strong_buy'] + grade_counts['buy'] + 
+                                    grade_counts['outperform'] + grade_counts['overweight'])
+                analyst_hold_count = (grade_counts['hold'] + grade_counts['neutral'] + 
+                                     grade_counts['equal_weight'] + grade_counts['sector_perform'])
+                analyst_sell_count = (grade_counts['underperform'] + grade_counts['underweight'] + 
+                                     grade_counts['sell'] + grade_counts['strong_sell'])
+                
                 analyst_sentiment_count = len(analyst_grades_data)
                 if analyst_sentiment_count > 0:
                     avg_analyst_sentiment = (analyst_buy_count - analyst_sell_count) / analyst_sentiment_count
@@ -961,6 +1049,19 @@ class IndexCacheOrchestratorAgno:
                 'analystBuyCount': analyst_buy_count,
                 'analystHoldCount': analyst_hold_count,
                 'analystSellCount': analyst_sell_count,
+                # Counts for each specific grade type from newGrade (aggregated from grade_counts dict)
+                'analystStrongBuyCount': grade_counts['strong_buy'],
+                'analystBuyCountSpecific': grade_counts['buy'],
+                'analystOutperformCount': grade_counts['outperform'],
+                'analystOverweightCount': grade_counts['overweight'],
+                'analystHoldCountSpecific': grade_counts['hold'],
+                'analystNeutralCount': grade_counts['neutral'],
+                'analystEqualWeightCount': grade_counts['equal_weight'],
+                'analystSectorPerformCount': grade_counts['sector_perform'],
+                'analystUnderperformCount': grade_counts['underperform'],
+                'analystUnderweightCount': grade_counts['underweight'],
+                'analystSellCountSpecific': grade_counts['sell'],
+                'analystStrongSellCount': grade_counts['strong_sell'],
                 'analystEstimatesScore': analyst_estimates_score,
                 'earningsSurprisesScore': earnings_surprises_count,
                 'earningsPositiveSurprises': earnings_positive_surprises,
